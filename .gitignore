@@ -1,0 +1,148 @@
+
+# Python related
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+eggs/
+parts/
+sdist/
+develop-eggs/
+*.egg-info/
+pip-wheel-metadata/
+*.egg
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+htmlcov/
+
+# Pyre type checker
+.pyre/
+
+# Translations
+*.mo
+
+# Django stuff:
+local_settings.py
+db.sqlite3
+media
+
+# Flask instance folder
+instance/
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# poetry
+poetry.lock
+
+# virtualenv
+venv/
+ENV/
+.venv/
+env/
+env.bak/
+venv.bak/
+
+# VS Code
+.vscode/
+
+# IDEs and editors
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# macOS
+.DS_Store
+
+# Linux
+*~
+
+# Logs
+*.log
+
+# Compiled C extensions
+*.so
+
+# Coverage
+coverage.xml
+
+# mypy
+.mypy_cache/
+
+# ruff/linters
+.ruff_cache/
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# System files
+.DS_Store
+Thumbs.db
+
+# SQLite
+*.sqlite3
+
+# Environment variables
+.env
+.env.*
+env.local
+secrets.env
+
+# Local virtual environment for project
+.venv/
+
+# Python egg
+*.egg-info/
+
+# setuptools
+*.egg-info/
+
+# coverage reports
+coverage/
+
+# Temporary
+*.tmp
+*.temp
+
+# Caches
+.cache/
+
+# Node modules (if present)
+node_modules/
