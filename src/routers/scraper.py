@@ -1,4 +1,8 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+import traceback
+from sqlalchemy.ext.asyncio.session import AsyncSession
+
+from src.database import get_session
 from src.dependency.services import get_scraper_service
 from src.services.scraper_service import ScraperService
 
@@ -8,10 +12,56 @@ router = APIRouter(
 )
 
 
-@router.get("/")
-def scraper_single_url(
-    url: str,
+@router.get("/single")
+async def scraper_single_url(
+    single_url: str,
+    session: AsyncSession = Depends(get_session),
     scraper_service: ScraperService = Depends(get_scraper_service),
 ):
-    status_code, html_content = scraper_service.http_get_content(url)
-    return scraper_service.extract_product_info(html_content)
+    try:
+        return await scraper_service.scrape_single_product(single_url, session)
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get("/list")
+async def scrape_list_url(
+    list_url: str,
+    session: AsyncSession = Depends(get_session),
+    scrape_service: ScraperService = Depends(get_scraper_service),
+):
+    return await scrape_service.scrape_list_product(list_url, session)
+
+
+@router.get("/publisher")
+async def scrape_publisher(
+    publisher_url: str,
+    session: AsyncSession = Depends(get_session),
+    scrape_service: ScraperService = Depends(get_scraper_service),
+):
+    return await scrape_service.scrape_publisher(publisher_url, session)
+
+
+@router.post("/process_ai")
+async def process_ai_unprocessed(
+    concurrency: int = 25,
+    session: AsyncSession = Depends(get_session),
+    scrape_service: ScraperService = Depends(get_scraper_service),
+):
+    """Trigger Phase 2 AI warm-up and concurrent processing for all unprocessed raw books."""
+    try:
+        return await scrape_service.process_ai_pipeline(
+            session, concurrency=concurrency
+        )
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get("/taxonomy")
+def scrape_list_taxonomise(
+    list_url: str,
+    scrape_service: ScraperService = Depends(get_scraper_service),
+):
+    return scrape_service.scrape_list_taxonomy(list_url)

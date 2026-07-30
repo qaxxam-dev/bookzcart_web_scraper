@@ -9,3 +9,10 @@ Jinja2==3.1.6
 httpx==0.28.1
 beautifulsoup4==4.15.0
 lxml==6.1.1
+requests==2.34.2
+pillow==12.3.0
+google-genai==2.10.0
+ollama==0.6.2
+openrouter==0.11.44
+aiohttp==3.14.3
+openai>=1.0.0
