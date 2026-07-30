@@ -5,7 +5,7 @@ import uuid
 
 from sqlalchemy.ext.asyncio.session import AsyncSession
 
-from src.database import AsyncSessionLocal
+from src.database import AsyncSessionLocal, seed_taxonomies
 from src.models.raw_book_data import RawBookData
 from src.services.scraper.list_scraper_service import ListScraperService
 from src.services.scraper.page_scraper_service import PageScraperService
@@ -166,6 +166,9 @@ class ScraperService:
         print(
             f"🚀 Phase 2 Starting: {len(unprocessed_books)} unprocessed books found."
         )
+
+        # Pre-seed taxonomy rows to prevent race conditions during concurrent inserts
+        await seed_taxonomies()
 
         # 1. Warm-Up DeepInfra serverless container
         await self.book_ai_processor.warmup_deepinfra()
@@ -349,4 +352,6 @@ class ScraperService:
         }
 
     def scrape_list_taxonomy(self, list_url: str):
-        return self.taxonomy_scraper.scrape_list_taxonomy(list_url)
+        html_content = self.page_scraper.extract_html_content(list_url)
+        taxonomies = self.taxonomy_scraper.extract_taxonomise_detailed(html_content)
+        return taxonomies

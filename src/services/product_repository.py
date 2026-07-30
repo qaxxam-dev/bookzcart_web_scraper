@@ -1,6 +1,9 @@
+import asyncio
 from datetime import datetime
 from decimal import Decimal
+from typing import ClassVar
 
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio.session import AsyncSession
 from sqlmodel import select
 
@@ -13,8 +16,51 @@ from src.models.raw_book_data import RawBookData
 
 
 class ProductRepository:
+    _taxonomy_cache: ClassVar[dict[TaxonomySlug, int]] = {}
+
     def __init__(self, session: AsyncSession):
         self.session = session
+
+    async def _get_taxonomy(self, slug: TaxonomySlug) -> Taxonomy:
+        """Fetch a Taxonomy by its enum slug, creating it if missing."""
+        if slug in ProductRepository._taxonomy_cache:
+            tax_id = ProductRepository._taxonomy_cache[slug]
+            taxonomy = await self.session.get(Taxonomy, tax_id)
+            if taxonomy:
+                return taxonomy
+
+        stmt = select(Taxonomy).where(Taxonomy.name == slug)
+        result = await self.session.execute(stmt)
+        taxonomy = result.scalars().first()
+
+        if not taxonomy:
+            insert_stmt = (
+                pg_insert(Taxonomy)
+                .values(
+                    name=slug,
+                    label=slug.value.replace("_", " ").title(),
+                )
+                .on_conflict_do_nothing(index_elements=["name"])
+                .returning(Taxonomy.id)
+            )
+            try:
+                async with self.session.begin_nested():
+                    insert_res = await self.session.execute(insert_stmt)
+                    inserted_id = insert_res.scalar_one_or_none()
+            except Exception:
+                inserted_id = None
+
+            if inserted_id is not None:
+                taxonomy = await self.session.get(Taxonomy, inserted_id)
+            else:
+                result = await self.session.execute(stmt)
+                taxonomy = result.scalars().first()
+
+        if taxonomy and taxonomy.id:
+            ProductRepository._taxonomy_cache[slug] = taxonomy.id
+            return taxonomy
+
+        raise RuntimeError(f"Could not get or create taxonomy for slug {slug}")
 
     async def _get_or_create_term(
         self,
@@ -24,8 +70,14 @@ class ProductRepository:
     ) -> Term:
         """
         Find an existing Term by taxonomy + name, or create one.
-        Looks up the Taxonomy row by its enum slug first.
+        Handles concurrent insertions using PostgreSQL ON CONFLICT DO NOTHING.
         """
+        tamil_name = tamil_name.strip() if tamil_name else None
+        english_name = english_name.strip() if english_name else None
+
+        if not tamil_name and not english_name:
+            raise ValueError("Either tamil_name or english_name must be provided")
+
         taxonomy = await self._get_taxonomy(taxonomy_slug)
 
         if tamil_name:
@@ -33,41 +85,62 @@ class ProductRepository:
                 Term.taxonomy_id == taxonomy.id,
                 Term.tamil_name == tamil_name,
             )
+            conflict_target = ["taxonomy_id", "tamil_name"]
         else:
             stmt = select(Term).where(
                 Term.taxonomy_id == taxonomy.id,
                 Term.english_name == english_name,
             )
+            conflict_target = ["taxonomy_id", "english_name"]
 
+        # Step 1: Check existing term
         result = await self.session.execute(stmt)
         term = result.scalars().first()
+        if term:
+            return term
 
-        if not term:
-            term = Term(
+        # Step 2: Atomic insertion handling concurrent conflicts
+        insert_stmt = (
+            pg_insert(Term)
+            .values(
                 taxonomy_id=taxonomy.id,
                 tamil_name=tamil_name,
                 english_name=english_name,
             )
-            self.session.add(term)
-            await self.session.flush()  # get term.id, no commit yet
+            .on_conflict_do_nothing(index_elements=conflict_target)
+            .returning(Term.id)
+        )
 
-        return term
+        try:
+            async with self.session.begin_nested():
+                insert_res = await self.session.execute(insert_stmt)
+                inserted_id = insert_res.scalar_one_or_none()
+        except Exception:
+            inserted_id = None
 
-    async def _get_taxonomy(self, slug: TaxonomySlug) -> Taxonomy:
-        """Fetch a Taxonomy by its enum slug, creating it if missing."""
-        stmt = select(Taxonomy).where(Taxonomy.name == slug)
+        if inserted_id is not None:
+            term = await self.session.get(Term, inserted_id)
+            if term:
+                return term
+
+        # Step 3: Re-query after potential conflict resolution
         result = await self.session.execute(stmt)
-        taxonomy = result.scalars().first()
+        term = result.scalars().first()
+        if term:
+            return term
 
-        if not taxonomy:
-            taxonomy = Taxonomy(
-                name=slug,
-                label=slug.value.replace("_", " ").title(),
-            )
-            self.session.add(taxonomy)
-            await self.session.flush()
+        # Step 4: Retry loop for edge case timing delays
+        for _ in range(3):
+            await asyncio.sleep(0.05)
+            result = await self.session.execute(stmt)
+            term = result.scalars().first()
+            if term:
+                return term
 
-        return taxonomy
+        raise RuntimeError(
+            f"Could not get or create term for taxonomy {taxonomy_slug}: "
+            f"tamil='{tamil_name}', english='{english_name}'"
+        )
 
     async def save_raw_book_data(self, url: str, raw_data: dict) -> RawBookData:
         """
@@ -193,12 +266,16 @@ class ProductRepository:
             (TaxonomySlug.LITERARY_FORM, ai_data.get("literary_form")),
         ]
 
+        added_term_ids: set[int] = set()
+
         for taxonomy_slug, term_name in single_term_mappings:
-            if term_name:
+            if term_name and str(term_name).strip():
                 term = await self._get_or_create_term(
-                    taxonomy_slug, tamil_name=str(term_name)
+                    taxonomy_slug, tamil_name=str(term_name).strip()
                 )
-                self.session.add(ProductTerm(product_id=product.id, term_id=term.id))
+                if term.id and term.id not in added_term_ids:
+                    self.session.add(ProductTerm(product_id=product.id, term_id=term.id))
+                    added_term_ids.add(term.id)
 
         # Multi-value taxonomy fields from ai_categorizer
         multi_term_mappings: list[tuple[TaxonomySlug, list[str]]] = [
@@ -208,13 +285,15 @@ class ProductRepository:
 
         for taxonomy_slug, names in multi_term_mappings:
             for name in names or []:
-                if name:
+                if name and str(name).strip():
                     term = await self._get_or_create_term(
-                        taxonomy_slug, english_name=str(name)
+                        taxonomy_slug, english_name=str(name).strip()
                     )
-                    self.session.add(
-                        ProductTerm(product_id=product.id, term_id=term.id)
-                    )
+                    if term.id and term.id not in added_term_ids:
+                        self.session.add(
+                            ProductTerm(product_id=product.id, term_id=term.id)
+                        )
+                        added_term_ids.add(term.id)
 
         # --- 3. Update pipeline status — this payload already carries
         # categorization + SEO output, so it's done through seo_done ---

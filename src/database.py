@@ -16,14 +16,34 @@ AsyncSessionLocal = sessionmaker(
 )
 
 
+async def seed_taxonomies() -> None:
+    """Pre-seed all Taxonomy rows into DB using ON CONFLICT DO NOTHING."""
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from src.models.product_taxonomy import Taxonomy, TaxonomySlug
+
+    async with AsyncSessionLocal() as session:
+        for slug in TaxonomySlug:
+            stmt = (
+                pg_insert(Taxonomy)
+                .values(
+                    name=slug,
+                    label=slug.value.replace("_", " ").title(),
+                )
+                .on_conflict_do_nothing(index_elements=["name"])
+            )
+            await session.execute(stmt)
+        await session.commit()
+
+
 async def create_db_and_tables() -> None:
     from sqlalchemy import text
     async with async_engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
         await conn.execute(text("ALTER TABLE product ADD COLUMN IF NOT EXISTS raw_data_id INTEGER REFERENCES raw_book_data(id);"))
-
+    await seed_taxonomies()
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         yield session
+
