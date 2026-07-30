@@ -26,6 +26,7 @@ class Term(SQLModel, table=True):
     taxonomy_id: int = Field(foreign_key="taxonomy.id", index=True)
     tamil_name: Optional[str] = Field(default=None, index=True)
     english_name: Optional[str] = Field(default=None, index=True)
+    slug: Optional[str] = Field(default=None, index=True)   
 
     taxonomy: "Taxonomy" = Relationship(back_populates="terms")
     products: list["Product"] = Relationship(

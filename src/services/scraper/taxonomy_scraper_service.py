@@ -4,23 +4,18 @@ from bs4 import BeautifulSoup
 
 class TaxonomyScraperService:
 
-    def extract_taxonomise_detailed(self, html_content: str) -> Dict:
-        soup = BeautifulSoup(html_content, "lxml")
+    def _extract_detailed_from_container(self, container) -> Dict:
         result = {"taxonomise": [], "total_taxonomise": 0}
-
-        taxonomy_container = soup.find("div", class_="author_list_page")
-
-        if not taxonomy_container:
+        if not container:
             return result
 
-        # Find all h2 headers
-        h2_headers = taxonomy_container.find_all("h2")
+        h2_headers = container.find_all("h2")
 
         # Find the first alphabetical header (A, B, C, etc.) after Featured
         start_index = -1
         for i, h2 in enumerate(h2_headers):
             header_text = h2.get_text(strip=True)
-            # Skip Featured and any non-alphabetical single letters
+            # Skip Featured
             if header_text == "Featured":
                 continue
             # Found first alphabetical header
@@ -28,60 +23,54 @@ class TaxonomyScraperService:
                 start_index = i
                 break
 
-        if start_index == -1:
-            return result
+        if start_index != -1:
+            starting_h2 = h2_headers[start_index]
+            found_start = False
+        else:
+            starting_h2 = h2_headers[0] if h2_headers else None
+            found_start = True if not starting_h2 else False
 
-        # Get all items from the first alphabetical header onwards
-        # Find all a tags that contain div.item
-        all_items = taxonomy_container.find_all("a")
+        all_item_divs = container.find_all("div", class_="item")
 
-        # Find the first item after the starting h2
-        starting_h2 = h2_headers[start_index]
-        found_start = False
-
-        for item in all_items:
-            # Check if this item comes after the starting h2
+        for item_div in all_item_divs:
             if not found_start:
-                # Check if this is the starting h2 or after it
-                if item.find_previous("h2") == starting_h2:
+                if starting_h2 and item_div.find_previous("h2") == starting_h2:
                     found_start = True
                 else:
                     continue
 
-            item_div = item.find("div", class_="item")
-            if item_div:
-                h4 = item_div.find("h4")
-                if h4:
-                    # Extract the href and get slug
-                    href = item.get("href", "")
-                    slug = href.split("/")[-1] if href else ""
+            a_tag = item_div.find("a", href=True)
+            if not a_tag and item_div.parent and item_div.parent.name == "a":
+                a_tag = item_div.parent
 
-                    # Extract name logic
-                    contents = h4.contents
-                    name_parts = []
-                    for content in contents:
-                        if isinstance(content, str):
-                            if content.strip():
-                                name_parts.append(content.strip())
-                        elif content.name == "font":
-                            name_parts.append(content.get_text(strip=True))
+            href = a_tag.get("href", "") if a_tag else ""
+            slug = href.rstrip("/").split("/")[-1] if href else ""
 
-                    if len(name_parts) >= 2:
-                        english_name = name_parts[0]
-                        tamil_name = name_parts[1]
-                    else:
-                        text_parts = h4.get_text(separator="|", strip=True).split("|")
-                        text_parts = [p.strip() for p in text_parts if p.strip()]
-                        english_name = text_parts[0] if len(text_parts) > 0 else ""
-                        tamil_name = text_parts[1] if len(text_parts) > 1 else ""
+            h4 = item_div.find("h4")
+            if h4:
+                font_tag = h4.find("font")
+                tamil_name = font_tag.get_text(strip=True) if font_tag else ""
+                if font_tag:
+                    font_tag.extract()
+                english_name = h4.get_text(strip=True)
 
-                    taxonomy_data = {
-                        "english_name": english_name,
-                        "tamil_name": tamil_name,
-                        "slug": slug,  # Added slug field
-                    }
+                taxonomy_data = {
+                    "english_name": english_name,
+                    "tamil_name": tamil_name,
+                    "slug": slug,
+                }
 
-                    result["taxonomise"].append(taxonomy_data)
+                result["taxonomise"].append(taxonomy_data)
 
         result["total_taxonomise"] = len(result["taxonomise"])
         return result
+
+    def extract_taxonomise_authors_detailed(self, html_content: str) -> Dict:
+        soup = BeautifulSoup(html_content, "lxml")
+        container = soup.find("div", class_="author_list_page")
+        return self._extract_detailed_from_container(container)
+
+    def extract_taxonomise_publishers_detailed(self, html_content: str) -> Dict:
+        soup = BeautifulSoup(html_content, "lxml")
+        container = soup.find("div", class_="publisher_list_page")
+        return self._extract_detailed_from_container(container)

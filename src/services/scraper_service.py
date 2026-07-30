@@ -6,6 +6,7 @@ import uuid
 from sqlalchemy.ext.asyncio.session import AsyncSession
 
 from src.database import AsyncSessionLocal, seed_taxonomies
+from src.models.product_taxonomy import TaxonomySlug
 from src.models.raw_book_data import RawBookData
 from src.services.scraper.list_scraper_service import ListScraperService
 from src.services.scraper.page_scraper_service import PageScraperService
@@ -163,9 +164,7 @@ class ScraperService:
             print("No unprocessed raw books found in database.")
             return {"processed": 0, "failed": 0}
 
-        print(
-            f"🚀 Phase 2 Starting: {len(unprocessed_books)} unprocessed books found."
-        )
+        print(f"🚀 Phase 2 Starting: {len(unprocessed_books)} unprocessed books found.")
 
         # Pre-seed taxonomy rows to prevent race conditions during concurrent inserts
         await seed_taxonomies()
@@ -216,9 +215,7 @@ class ScraperService:
                             f"Image processing failed for Raw #{raw_book.id}: {img_result_or_exc}"
                         )
                         if progress:
-                            progress.fail_image(
-                                raw_book.url, str(img_result_or_exc)
-                            )
+                            progress.fail_image(raw_book.url, str(img_result_or_exc))
                         img_result_or_exc = None
                     else:
                         if progress:
@@ -227,9 +224,7 @@ class ScraperService:
                     if not ai_result:
                         failed_count += 1
                         if progress:
-                            progress.fail_product(
-                                raw_book.url, "AI extraction failed"
-                            )
+                            progress.fail_product(raw_book.url, "AI extraction failed")
                         return
 
                     ai_categorizer = ai_result.get("taxonomy")
@@ -280,9 +275,7 @@ class ScraperService:
                         if progress:
                             progress.complete_product()
                     except Exception as exc:
-                        print(
-                            f"Database save failed for Raw #{raw_book.id}: {exc}"
-                        )
+                        print(f"Database save failed for Raw #{raw_book.id}: {exc}")
                         failed_count += 1
                         if progress:
                             progress.fail_product(raw_book.url, str(exc))
@@ -351,7 +344,28 @@ class ScraperService:
             "ai_failed": ai_summary["failed"],
         }
 
-    def scrape_list_taxonomy(self, list_url: str):
+    async def scrape_list_authors_taxonomy(
+        self, list_url: str, session: AsyncSession
+    ):
         html_content = self.page_scraper.extract_html_content(list_url)
-        taxonomies = self.taxonomy_scraper.extract_taxonomise_detailed(html_content)
+        taxonomies = self.taxonomy_scraper.extract_taxonomise_authors_detailed(
+            html_content
+        )
+        repo = ProductRepository(session)
+        await repo.save_taxonomy_terms(
+            TaxonomySlug.AUTHOR, taxonomies.get("taxonomise", [])
+        )
+        return taxonomies
+
+    async def scrape_list_publishers_taxonomy(
+        self, list_url: str, session: AsyncSession
+    ):
+        html_content = self.page_scraper.extract_html_content(list_url)
+        taxonomies = self.taxonomy_scraper.extract_taxonomise_publishers_detailed(
+            html_content
+        )
+        repo = ProductRepository(session)
+        await repo.save_taxonomy_terms(
+            TaxonomySlug.PUBLISHER, taxonomies.get("taxonomise", [])
+        )
         return taxonomies

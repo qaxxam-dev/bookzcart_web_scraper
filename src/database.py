@@ -40,6 +40,8 @@ async def create_db_and_tables() -> None:
     async with async_engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
         await conn.execute(text("ALTER TABLE product ADD COLUMN IF NOT EXISTS raw_data_id INTEGER REFERENCES raw_book_data(id);"))
+        await conn.execute(text("ALTER TABLE term ADD COLUMN IF NOT EXISTS slug VARCHAR;"))
+        await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_term_slug ON term (slug);"))
     await seed_taxonomies()
 
 

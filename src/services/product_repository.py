@@ -67,16 +67,18 @@ class ProductRepository:
         taxonomy_slug: TaxonomySlug,
         tamil_name: str | None = None,
         english_name: str | None = None,
+        slug: str | None = None,
     ) -> Term:
         """
-        Find an existing Term by taxonomy + name, or create one.
+        Find an existing Term by taxonomy + name/slug, or create one.
         Handles concurrent insertions using PostgreSQL ON CONFLICT DO NOTHING.
         """
         tamil_name = tamil_name.strip() if tamil_name else None
         english_name = english_name.strip() if english_name else None
+        slug = slug.strip() if slug else None
 
-        if not tamil_name and not english_name:
-            raise ValueError("Either tamil_name or english_name must be provided")
+        if not tamil_name and not english_name and not slug:
+            raise ValueError("Either tamil_name, english_name, or slug must be provided")
 
         taxonomy = await self._get_taxonomy(taxonomy_slug)
 
@@ -86,17 +88,35 @@ class ProductRepository:
                 Term.tamil_name == tamil_name,
             )
             conflict_target = ["taxonomy_id", "tamil_name"]
-        else:
+        elif english_name:
             stmt = select(Term).where(
                 Term.taxonomy_id == taxonomy.id,
                 Term.english_name == english_name,
             )
             conflict_target = ["taxonomy_id", "english_name"]
+        else:
+            stmt = select(Term).where(
+                Term.taxonomy_id == taxonomy.id,
+                Term.slug == slug,
+            )
+            conflict_target = ["taxonomy_id", "slug"]
 
         # Step 1: Check existing term
         result = await self.session.execute(stmt)
         term = result.scalars().first()
         if term:
+            updated = False
+            if slug and term.slug != slug:
+                term.slug = slug
+                updated = True
+            if english_name and not term.english_name:
+                term.english_name = english_name
+                updated = True
+            if tamil_name and not term.tamil_name:
+                term.tamil_name = tamil_name
+                updated = True
+            if updated:
+                self.session.add(term)
             return term
 
         # Step 2: Atomic insertion handling concurrent conflicts
@@ -106,6 +126,7 @@ class ProductRepository:
                 taxonomy_id=taxonomy.id,
                 tamil_name=tamil_name,
                 english_name=english_name,
+                slug=slug,
             )
             .on_conflict_do_nothing(index_elements=conflict_target)
             .returning(Term.id)
@@ -127,6 +148,18 @@ class ProductRepository:
         result = await self.session.execute(stmt)
         term = result.scalars().first()
         if term:
+            updated = False
+            if slug and term.slug != slug:
+                term.slug = slug
+                updated = True
+            if english_name and not term.english_name:
+                term.english_name = english_name
+                updated = True
+            if tamil_name and not term.tamil_name:
+                term.tamil_name = tamil_name
+                updated = True
+            if updated:
+                self.session.add(term)
             return term
 
         # Step 4: Retry loop for edge case timing delays
@@ -139,8 +172,75 @@ class ProductRepository:
 
         raise RuntimeError(
             f"Could not get or create term for taxonomy {taxonomy_slug}: "
-            f"tamil='{tamil_name}', english='{english_name}'"
+            f"tamil='{tamil_name}', english='{english_name}', slug='{slug}'"
         )
+
+    async def save_taxonomy_terms(
+        self,
+        taxonomy_slug: TaxonomySlug,
+        terms_data: list[dict],
+    ) -> None:
+        """
+        Check and create taxonomy terms (authors, publishers, etc.) in the database in batch.
+        Each dict in terms_data contains 'english_name', 'tamil_name', and optional 'slug'.
+        """
+        if not terms_data:
+            return
+
+        taxonomy = await self._get_taxonomy(taxonomy_slug)
+
+        records_with_tamil = []
+        records_english_only = []
+
+        seen_tamil = set()
+        seen_english = set()
+
+        for item in terms_data:
+            tamil = item.get("tamil_name").strip() if item.get("tamil_name") else None
+            english = item.get("english_name").strip() if item.get("english_name") else None
+            slug = item.get("slug").strip() if item.get("slug") else None
+
+            if not tamil and not english and not slug:
+                continue
+
+            row = {
+                "taxonomy_id": taxonomy.id,
+                "tamil_name": tamil,
+                "english_name": english,
+                "slug": slug,
+            }
+
+            if tamil:
+                if (taxonomy.id, tamil) not in seen_tamil:
+                    seen_tamil.add((taxonomy.id, tamil))
+                    records_with_tamil.append(row)
+            elif english:
+                if (taxonomy.id, english) not in seen_english:
+                    seen_english.add((taxonomy.id, english))
+                    records_english_only.append(row)
+            elif slug:
+                records_english_only.append(row)
+
+        chunk_size = 500
+        for i in range(0, len(records_with_tamil), chunk_size):
+            chunk = records_with_tamil[i : i + chunk_size]
+            stmt = (
+                pg_insert(Term)
+                .values(chunk)
+                .on_conflict_do_nothing(index_elements=["taxonomy_id", "tamil_name"])
+            )
+            await self.session.execute(stmt)
+
+        for i in range(0, len(records_english_only), chunk_size):
+            chunk = records_english_only[i : i + chunk_size]
+            stmt = (
+                pg_insert(Term)
+                .values(chunk)
+                .on_conflict_do_nothing(index_elements=["taxonomy_id", "english_name"])
+            )
+            await self.session.execute(stmt)
+
+        await self.session.commit()
 
     async def save_raw_book_data(self, url: str, raw_data: dict) -> RawBookData:
         """

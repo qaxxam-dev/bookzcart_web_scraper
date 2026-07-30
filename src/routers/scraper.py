@@ -59,9 +59,19 @@ async def process_ai_unprocessed(
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@router.get("/taxonomy")
-def scrape_list_taxonomise(
+@router.get("/authors")
+async def scrape_list_taxonomise_authors(
     list_url: str,
+    session: AsyncSession = Depends(get_session),
     scrape_service: ScraperService = Depends(get_scraper_service),
 ):
-    return scrape_service.scrape_list_taxonomy(list_url)
+    return await scrape_service.scrape_list_authors_taxonomy(list_url, session)
+
+
+@router.get("/publishers")
+async def scrape_list_taxonomise_publishers(
+    list_url: str,
+    session: AsyncSession = Depends(get_session),
+    scrape_service: ScraperService = Depends(get_scraper_service),
+):
+    return await scrape_service.scrape_list_publishers_taxonomy(list_url, session)
