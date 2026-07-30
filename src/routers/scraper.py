@@ -59,6 +59,19 @@ async def process_ai_unprocessed(
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@router.post("/reprocess_skipped")
+async def reprocess_skipped_urls(
+    session: AsyncSession = Depends(get_session),
+    scrape_service: ScraperService = Depends(get_scraper_service),
+):
+    """Re-scrape all skipped URLs where raw_data is NULL and run Phase 2 AI pipeline."""
+    try:
+        return await scrape_service.reprocess_skipped_urls(session)
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @router.get("/authors")
 async def scrape_list_taxonomise_authors(
     list_url: str,

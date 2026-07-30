@@ -42,6 +42,11 @@ async def create_db_and_tables() -> None:
         await conn.execute(text("ALTER TABLE product ADD COLUMN IF NOT EXISTS raw_data_id INTEGER REFERENCES raw_book_data(id);"))
         await conn.execute(text("ALTER TABLE term ADD COLUMN IF NOT EXISTS slug VARCHAR;"))
         await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_term_slug ON term (slug);"))
+        await conn.execute(text("ALTER TABLE raw_book_data ALTER COLUMN raw_data DROP NOT NULL;"))
+        await conn.execute(text("ALTER TABLE raw_book_data ALTER COLUMN title DROP NOT NULL;"))
+        await conn.execute(text("ALTER TABLE raw_book_data ALTER COLUMN is_ai_processed DROP NOT NULL;"))
+        await conn.execute(text("ALTER TABLE raw_book_data ALTER COLUMN created_at DROP NOT NULL;"))
+        await conn.execute(text("ALTER TABLE raw_book_data ALTER COLUMN updated_at DROP NOT NULL;"))
     await seed_taxonomies()
 
 

@@ -101,7 +101,7 @@
 
         // Endpoint label
         if (data.endpoint) {
-            const nameMap = { single: "Single Product", list: "List Page", publisher: "Publisher", taxonomy: "Taxonomy" };
+            const nameMap = { publisher: "Publisher", reprocess_skipped: "Reprocess Skipped URLs" };
             dom.endpointLabel.textContent = nameMap[data.endpoint] || data.endpoint;
         } else {
             dom.endpointLabel.textContent = "—";

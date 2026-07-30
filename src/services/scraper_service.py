@@ -55,11 +55,17 @@ class ScraperService:
         """
         repo = ProductRepository(session)
         existing_raw = await repo.get_raw_book_by_url(url)
-        if existing_raw and existing_raw.is_ai_processed:
-            print(f"Skipping {url} — already processed by AI.")
-            if progress:
-                progress.complete_scraping()
-            return existing_raw
+        if existing_raw:
+            if existing_raw.is_ai_processed:
+                print(f"Skipping {url} — already processed by AI.")
+                if progress:
+                    progress.complete_scraping()
+                return existing_raw
+            if existing_raw.raw_data is not None:
+                print(f"Skipping {url} raw fetch — raw data already extracted.")
+                if progress:
+                    progress.complete_scraping()
+                return existing_raw
 
         if progress:
             progress.start_product(url)
@@ -76,9 +82,51 @@ class ScraperService:
 
         except Exception as exc:
             print(f"Failed to scrape raw data for {url}: {exc}")
+            try:
+                await repo.save_raw_book_data(url, None)
+            except Exception as save_exc:
+                print(f"Failed to save skipped record for {url}: {save_exc}")
             if progress:
                 progress.fail_product(url, str(exc))
             return None
+
+    async def reprocess_skipped_urls(
+        self,
+        session: AsyncSession,
+        progress: ProgressManager | None = None,
+    ) -> dict:
+        """
+        Query all skipped URLs (where raw_data is NULL), attempt to re-scrape them,
+        and run Phase 2 AI processing pipeline on newly scraped books.
+        """
+        repo = ProductRepository(session)
+        skipped_books = await repo.get_skipped_raw_books()
+
+        if not skipped_books:
+            print("No skipped URLs found in database.")
+            return {"skipped_total": 0, "reprocessed_raw": 0, "ai_processed": 0, "ai_failed": 0}
+
+        print(f"🔄 Reprocessing {len(skipped_books)} skipped URLs...")
+
+        if progress:
+            progress.set_list_page_products(len(skipped_books))
+
+        reprocessed_count = 0
+        for item in skipped_books:
+            raw_book = await self.scrape_single_raw(item.url, session, progress=progress)
+            if raw_book and raw_book.raw_data is not None:
+                reprocessed_count += 1
+
+        ai_summary = await self.process_ai_pipeline(
+            session, concurrency=25, progress=progress
+        )
+
+        return {
+            "skipped_total": len(skipped_books),
+            "reprocessed_raw": reprocessed_count,
+            "ai_processed": ai_summary["processed"],
+            "ai_failed": ai_summary["failed"],
+        }
 
     async def scrape_list_product_raw(
         self,

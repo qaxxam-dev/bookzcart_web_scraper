@@ -242,24 +242,28 @@ class ProductRepository:
 
         await self.session.commit()
 
-    async def save_raw_book_data(self, url: str, raw_data: dict) -> RawBookData:
+    async def save_raw_book_data(self, url: str, raw_data: dict | None) -> RawBookData:
         """
         Save or update raw scrape payload in raw_book_data table.
+        Supports saving None raw_data for skipped URLs.
         If record exists, updates raw_data and title without overwriting is_ai_processed.
         """
         stmt = select(RawBookData).where(RawBookData.url == url)
         result = await self.session.execute(stmt)
         raw_book = result.scalars().first()
 
+        title = raw_data.get("title") if raw_data else None
+
         if raw_book:
             raw_book.raw_data = raw_data
-            raw_book.title = raw_data.get("title")
+            if title:
+                raw_book.title = title
             raw_book.updated_at = datetime.utcnow()
             self.session.add(raw_book)
         else:
             raw_book = RawBookData(
                 url=url,
-                title=raw_data.get("title"),
+                title=title,
                 raw_data=raw_data,
                 is_ai_processed=False,
             )
@@ -270,8 +274,18 @@ class ProductRepository:
         return raw_book
 
     async def get_unprocessed_raw_books(self, limit: int | None = None) -> list[RawBookData]:
-        """Fetch all raw_book_data records where is_ai_processed is False."""
-        stmt = select(RawBookData).where(RawBookData.is_ai_processed == False)
+        """Fetch all raw_book_data records where is_ai_processed is False and raw_data is not None."""
+        stmt = select(RawBookData).where(
+            RawBookData.is_ai_processed == False, RawBookData.raw_data != None
+        )
+        if limit:
+            stmt = stmt.limit(limit)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_skipped_raw_books(self, limit: int | None = None) -> list[RawBookData]:
+        """Fetch all raw_book_data records where raw_data is NULL."""
+        stmt = select(RawBookData).where(RawBookData.raw_data == None)
         if limit:
             stmt = stmt.limit(limit)
         result = await self.session.execute(stmt)

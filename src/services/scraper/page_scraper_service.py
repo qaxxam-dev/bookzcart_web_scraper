@@ -1,3 +1,4 @@
+import time
 from fastapi import HTTPException
 import httpx
 
@@ -21,12 +22,19 @@ class PageScraperService:
             follow_redirects=True,
         )
 
-    def extract_html_content(self, url: str):
-        try:
-            response = self._client.get(url)
-            response.raise_for_status()
+    def extract_html_content(self, url: str, max_retries: int = 3):
+        last_error = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                response = self._client.get(url)
+                response.raise_for_status()
+                return response.text
+            except (httpx.RequestError, httpx.HTTPStatusError) as e:
+                last_error = e
+                if attempt < max_retries:
+                    print(f"Fetch attempt {attempt}/{max_retries} failed for {url}: {e}. Retrying after backoff...")
+                    time.sleep(1.5 * attempt)
 
-            return response.text
-
-        except httpx.RequestError as e:
-            raise HTTPException(status_code=400, detail=f"Error fetching URL: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Error fetching URL after {max_retries} attempts: {last_error}"
+        )

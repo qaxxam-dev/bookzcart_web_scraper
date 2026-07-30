@@ -29,38 +29,9 @@ _job_lock = asyncio.Lock()
 
 ENDPOINTS = [
     {
-        "id": "single",
-        "name": "Single Product (Full Two-Phase)",
-        "path": "/api/scrape/single",
-        "description": "Scrape raw payload to DB, then trigger warm-up & AI extraction.",
-        "fields": [
-            {
-                "name": "single_url",
-                "label": "Product URL",
-                "type": "url",
-                "placeholder": "https://example.com/book/123",
-                "required": True,
-            }
-        ],
-    },
-    {
-        "id": "list",
-        "name": "List Page (Full Two-Phase)",
-        "path": "/api/scrape/list",
-        "description": "Bulk scrape list page items into raw DB, followed by warm GPU concurrent AI processing.",
-        "fields": [
-            {
-                "name": "list_url",
-                "label": "List URL",
-                "type": "url",
-                "placeholder": "https://example.com/publisher?page=1",
-                "required": True,
-            }
-        ],
-    },
-    {
         "id": "publisher",
         "name": "Publisher (Full Two-Phase)",
+        "method": "GET",
         "path": "/api/scrape/publisher",
         "description": "Full pipeline: Phase 1 bulk scrape all publisher pages to DB → Phase 2 GPU warmup & concurrent AI processing.",
         "fields": [
@@ -74,26 +45,12 @@ ENDPOINTS = [
         ],
     },
     {
-        "id": "process_ai",
-        "name": "Phase 2 Only: Concurrent AI Processing",
-        "path": "/api/scrape/process_ai",
-        "description": "Warm up DeepInfra GPU and process all unprocessed raw database records concurrently.",
+        "id": "reprocess_skipped",
+        "name": "Reprocess Skipped URLs",
+        "method": "POST",
+        "path": "/api/scrape/reprocess_skipped",
+        "description": "Re-scrape all skipped URLs (where raw_data is null) and run AI processing pipeline.",
         "fields": [],
-    },
-    {
-        "id": "taxonomy",
-        "name": "Taxonomy (List)",
-        "path": "/api/scrape/taxonomy",
-        "description": "Run taxonomy classification on all products from a list page.",
-        "fields": [
-            {
-                "name": "list_url",
-                "label": "List URL",
-                "type": "url",
-                "placeholder": "https://example.com/publisher?page=1",
-                "required": True,
-            }
-        ],
     },
 ]
 
@@ -143,34 +100,16 @@ async def start_job(
     async def _run_job():
         async with _job_lock:
             try:
-                if endpoint == "single":
-                    await scraper_service.scrape_single_product(
-                        url=params.get("single_url", ""),
-                        session=session,
-                        progress=progress,
-                    )
-                elif endpoint == "list":
-                    await scraper_service.scrape_list_product(
-                        list_url=params.get("list_url", ""),
-                        session=session,
-                        progress=progress,
-                    )
-                elif endpoint == "publisher":
+                if endpoint == "publisher":
                     await scraper_service.scrape_publisher(
                         publisher_url=params.get("publisher_url", ""),
                         session=session,
                         progress=progress,
                     )
-                elif endpoint == "process_ai":
-                    await scraper_service.process_ai_pipeline(
+                elif endpoint == "reprocess_skipped":
+                    await scraper_service.reprocess_skipped_urls(
                         session=session,
-                        concurrency=25,
                         progress=progress,
-                    )
-                elif endpoint == "taxonomy":
-                    await asyncio.to_thread(
-                        scraper_service.scrape_list_taxonomy,
-                        list_url=params.get("list_url", ""),
                     )
 
                 progress.complete_job()

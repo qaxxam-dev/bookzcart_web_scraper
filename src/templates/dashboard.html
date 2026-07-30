@@ -50,7 +50,7 @@
                     <div class="accordion" data-endpoint-id="{{ ep.id }}">
                         <button class="accordion__toggle" type="button" id="toggle-{{ ep.id }}" aria-expanded="false">
                             <div class="accordion__left">
-                                <span class="accordion__method">GET</span>
+                                <span class="accordion__method">{{ ep.method if ep.method else "GET" }}</span>
                                 <span class="accordion__path">{{ ep.path }}</span>
                             </div>
                             <svg class="accordion__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
