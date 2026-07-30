@@ -111,19 +111,19 @@ class ScraperService:
         if progress:
             progress.set_list_page_products(len(skipped_books))
 
-        reprocessed_count = 0
+        reprocessed_books: list[RawBookData] = []
         for item in skipped_books:
             raw_book = await self.scrape_single_raw(item.url, session, progress=progress)
             if raw_book and raw_book.raw_data is not None:
-                reprocessed_count += 1
+                reprocessed_books.append(raw_book)
 
         ai_summary = await self.process_ai_pipeline(
-            session, concurrency=25, progress=progress
+            session, raw_books=reprocessed_books, concurrency=25, progress=progress
         )
 
         return {
             "skipped_total": len(skipped_books),
-            "reprocessed_raw": reprocessed_count,
+            "reprocessed_raw": len(reprocessed_books),
             "ai_processed": ai_summary["processed"],
             "ai_failed": ai_summary["failed"],
         }
@@ -171,7 +171,7 @@ class ScraperService:
         url_data = self.publisher_scraper.extract_publisher_list_url(html_content)
 
         total_list_urls = len(url_data["list_url"])
-        total_raw_books = 0
+        all_raw_books: list[RawBookData] = []
 
         if progress:
             progress.set_publisher_pages(total_list_urls)
@@ -184,9 +184,9 @@ class ScraperService:
             raw_books = await self.scrape_list_product_raw(
                 list_url, session, progress=progress
             )
-            total_raw_books += len(raw_books)
+            all_raw_books.extend(raw_books)
 
-        return {"total_list_urls": total_list_urls, "total_raw_books": total_raw_books}
+        return {"total_list_urls": total_list_urls, "raw_books": all_raw_books}
 
     # ------------------------------------------------------------------ #
     #  PHASE 2: WARM-UP & CONCURRENT AI PROCESSING
@@ -195,21 +195,27 @@ class ScraperService:
     async def process_ai_pipeline(
         self,
         session: AsyncSession,
+        raw_books: list[RawBookData] | None = None,
         concurrency: int = 25,
         progress: ProgressManager | None = None,
     ) -> dict:
         """
         Phase 2:
         1. Warm up DeepInfra GPU container with a lightweight throwaway ping.
-        2. Query unprocessed raw_book_data records.
+        2. Query or filter unprocessed raw_book_data records.
         3. Execute AI extraction, watermark processing, image uploading, and persistence
            concurrently using coroutines (up to `concurrency` parallel tasks).
         """
-        repo = ProductRepository(session)
-        unprocessed_books = await repo.get_unprocessed_raw_books()
+        if raw_books is None:
+            repo = ProductRepository(session)
+            unprocessed_books = await repo.get_unprocessed_raw_books()
+        else:
+            unprocessed_books = [
+                b for b in raw_books if not b.is_ai_processed and b.raw_data is not None
+            ]
 
         if not unprocessed_books:
-            print("No unprocessed raw books found in database.")
+            print("No unprocessed raw books found to process.")
             return {"processed": 0, "failed": 0}
 
         print(f"🚀 Phase 2 Starting: {len(unprocessed_books)} unprocessed books found.")
@@ -350,7 +356,9 @@ class ScraperService:
             url, session, img_low=img_low, progress=progress
         )
         if raw_book:
-            await self.process_ai_pipeline(session, concurrency=1, progress=progress)
+            await self.process_ai_pipeline(
+                session, raw_books=[raw_book], concurrency=1, progress=progress
+            )
         return {"status": "success", "url": url}
 
     async def scrape_list_product(
@@ -364,7 +372,7 @@ class ScraperService:
             list_url, session, progress=progress
         )
         ai_summary = await self.process_ai_pipeline(
-            session, concurrency=25, progress=progress
+            session, raw_books=raw_books, concurrency=25, progress=progress
         )
         return {
             "total_raw_scraped": len(raw_books),
@@ -382,12 +390,13 @@ class ScraperService:
         pub_summary = await self.scrape_publisher_raw(
             publisher_url, session, progress=progress
         )
+        raw_books = pub_summary["raw_books"]
         ai_summary = await self.process_ai_pipeline(
-            session, concurrency=25, progress=progress
+            session, raw_books=raw_books, concurrency=25, progress=progress
         )
         return {
             "total_list_urls": pub_summary["total_list_urls"],
-            "total_raw_books": pub_summary["total_raw_books"],
+            "total_raw_books": len(raw_books),
             "ai_processed": ai_summary["processed"],
             "ai_failed": ai_summary["failed"],
         }
