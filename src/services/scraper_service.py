@@ -51,21 +51,50 @@ class ScraperService:
     ) -> RawBookData | None:
         """
         Phase 1 (Single): Scrape HTML payload and save directly into raw_book_data table.
-        Skips scraping if already processed by AI to prevent redundant operations.
+        Checks raw_book_data (url) and product (url, title, title_slug) before scraping to avoid duplication.
+        Skips scraping if already processed by AI or if product exists in database to save API requests.
         """
         repo = ProductRepository(session)
         existing_raw = await repo.get_raw_book_by_url(url)
+
         if existing_raw:
-            if existing_raw.is_ai_processed:
+            # 1. Skip if already raw-scraped AND processed by AI
+            if existing_raw.is_ai_processed and existing_raw.raw_data is not None:
                 print(f"Skipping {url} — already processed by AI.")
                 if progress:
                     progress.complete_scraping()
                 return existing_raw
+
+            # 2. Check if product already exists in Product table for this raw book (by url/raw_data_id/title)
+            existing_product = await repo.get_product_by_url_title_or_slug(
+                url=url,
+                raw_data_id=existing_raw.id,
+                title=existing_raw.title,
+            )
+            if existing_product:
+                print(f"Skipping {url} — product already exists in Product table.")
+                if not existing_raw.is_ai_processed:
+                    await repo.mark_raw_book_processed(existing_raw.id)
+                if progress:
+                    progress.complete_scraping()
+                return existing_raw
+
+            # 3. Skip raw fetch if raw_data already extracted (and not null)
             if existing_raw.raw_data is not None:
                 print(f"Skipping {url} raw fetch — raw data already extracted.")
                 if progress:
                     progress.complete_scraping()
                 return existing_raw
+        else:
+            # Check Product table directly by URL even if RawBookData row is missing
+            existing_product = await repo.get_product_by_url_title_or_slug(url=url)
+            if existing_product:
+                print(f"Skipping {url} — product already exists in Product table.")
+                raw_book = await repo.save_raw_book_data(url, existing_product.raw_data)
+                await repo.mark_raw_book_processed(raw_book.id)
+                if progress:
+                    progress.complete_scraping()
+                return raw_book
 
         if progress:
             progress.start_product(url)
@@ -73,6 +102,33 @@ class ScraperService:
         try:
             html_content = self.page_scraper.extract_html_content(url)
             book_data = self.single_scraper.extract_product_info(html_content, img_low)
+
+            if not book_data:
+                print(f"Warning: Extracted empty product info for {url}")
+                await repo.save_raw_book_data(url, None)
+                if progress:
+                    progress.fail_product(url, "Empty product info extracted")
+                return None
+
+            book_data["url"] = url
+
+            # Check Product table by extracted title to avoid re-running AI on duplicate titles
+            extracted_title = book_data.get("title")
+            if extracted_title:
+                existing_product = await repo.get_product_by_url_title_or_slug(
+                    url=url,
+                    title=extracted_title,
+                )
+                if existing_product:
+                    print(
+                        f"Skipping AI for {url} — product '{extracted_title}' already exists in database."
+                    )
+                    raw_book = await repo.save_raw_book_data(url, book_data)
+                    await repo.mark_raw_book_processed(raw_book.id)
+                    if progress:
+                        progress.complete_scraping()
+                    return raw_book
+
             raw_book = await repo.save_raw_book_data(url, book_data)
 
             if progress:
@@ -104,7 +160,12 @@ class ScraperService:
 
         if not skipped_books:
             print("No skipped URLs found in database.")
-            return {"skipped_total": 0, "reprocessed_raw": 0, "ai_processed": 0, "ai_failed": 0}
+            return {
+                "skipped_total": 0,
+                "reprocessed_raw": 0,
+                "ai_processed": 0,
+                "ai_failed": 0,
+            }
 
         print(f"🔄 Reprocessing {len(skipped_books)} skipped URLs...")
 
@@ -113,9 +174,24 @@ class ScraperService:
 
         reprocessed_books: list[RawBookData] = []
         for item in skipped_books:
-            raw_book = await self.scrape_single_raw(item.url, session, progress=progress)
-            if raw_book and raw_book.raw_data is not None:
+            raw_book = await self.scrape_single_raw(
+                item.url, session, progress=progress
+            )
+            if (
+                raw_book
+                and raw_book.raw_data is not None
+                and not raw_book.is_ai_processed
+            ):
                 reprocessed_books.append(raw_book)
+
+        if not reprocessed_books:
+            print("No new raw books require AI processing.")
+            return {
+                "skipped_total": len(skipped_books),
+                "reprocessed_raw": 0,
+                "ai_processed": 0,
+                "ai_failed": 0,
+            }
 
         ai_summary = await self.process_ai_pipeline(
             session, raw_books=reprocessed_books, concurrency=25, progress=progress

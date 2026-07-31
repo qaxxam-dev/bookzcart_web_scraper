@@ -246,7 +246,7 @@ class ProductRepository:
         """
         Save or update raw scrape payload in raw_book_data table.
         Supports saving None raw_data for skipped URLs.
-        If record exists, updates raw_data and title without overwriting is_ai_processed.
+        If record exists, updates raw_data and title without overwriting is_ai_processed unless previously None.
         """
         stmt = select(RawBookData).where(RawBookData.url == url)
         result = await self.session.execute(stmt)
@@ -255,9 +255,12 @@ class ProductRepository:
         title = raw_data.get("title") if raw_data else None
 
         if raw_book:
+            prev_raw = raw_book.raw_data
             raw_book.raw_data = raw_data
             if title:
                 raw_book.title = title
+            if prev_raw is None and raw_data is not None:
+                raw_book.is_ai_processed = False
             raw_book.updated_at = datetime.utcnow()
             self.session.add(raw_book)
         else:
@@ -285,7 +288,11 @@ class ProductRepository:
 
     async def get_skipped_raw_books(self, limit: int | None = None) -> list[RawBookData]:
         """Fetch all raw_book_data records where raw_data is NULL."""
-        stmt = select(RawBookData).where(RawBookData.raw_data == None)
+        from sqlalchemy import or_
+
+        stmt = select(RawBookData).where(
+            or_(RawBookData.raw_data.is_(None), RawBookData.raw_data == None)
+        )
         if limit:
             stmt = stmt.limit(limit)
         result = await self.session.execute(stmt)
@@ -296,6 +303,53 @@ class ProductRepository:
         stmt = select(RawBookData).where(RawBookData.url == url)
         result = await self.session.execute(stmt)
         return result.scalars().first()
+
+    async def get_product_by_url_title_or_slug(
+        self,
+        url: str | None = None,
+        title: str | None = None,
+        title_slug: str | None = None,
+        raw_data_id: int | None = None,
+    ) -> Product | None:
+        """
+        Check if a Product already exists in the database by raw_data_id, title, title_slug, or url.
+        Prevents duplicate scraping and AI processing to save API requests.
+        """
+        if raw_data_id is not None:
+            stmt = select(Product).where(Product.raw_data_id == raw_data_id)
+            result = await self.session.execute(stmt)
+            prod = result.scalars().first()
+            if prod:
+                return prod
+
+        if title_slug:
+            stmt = select(Product).where(
+                (Product.title_slug == title_slug) | (Product.source_key == title_slug)
+            )
+            result = await self.session.execute(stmt)
+            prod = result.scalars().first()
+            if prod:
+                return prod
+
+        if title:
+            stmt = select(Product).where(Product.title == title)
+            result = await self.session.execute(stmt)
+            prod = result.scalars().first()
+            if prod:
+                return prod
+
+        if url:
+            stmt = (
+                select(Product)
+                .join(RawBookData, Product.raw_data_id == RawBookData.id)
+                .where(RawBookData.url == url)
+            )
+            result = await self.session.execute(stmt)
+            prod = result.scalars().first()
+            if prod:
+                return prod
+
+        return None
 
     async def mark_raw_book_processed(self, raw_book_id: int) -> None:
         """Mark a raw_book_data row as processed by AI."""
