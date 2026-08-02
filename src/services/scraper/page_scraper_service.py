@@ -23,24 +23,44 @@ class PageScraperService:
     MIN_REQUEST_INTERVAL = 1.5  # seconds
     REQUEST_JITTER = 1.0  # up to +1.0s extra, randomized
 
-    # Cooldown specifically for HTTP 500s. Logs showed 1.5s/3s backoff
-    # between retries was NOT enough to clear a 500 — but stopping the job
-    # entirely cleared it within seconds. That points to a short-window
-    # rate limiter that the retries themselves were still feeding (each
-    # retry is another request against a still-tripped window). So a 500
-    # gets a longer, quiet pause before the next attempt, separate from the
-    # normal pacing above.
-    RATE_LIMIT_COOLDOWN = 20.0  # seconds, base
-    RATE_LIMIT_COOLDOWN_JITTER = 10.0
+    # Automatically recycle the underlying TCP connection after this many
+    # requests.  The target site appears to silently kill keep-alive sockets
+    # around the 150-request mark; rotating before that prevents the stall.
+    CONNECTION_RECYCLE_LIMIT = 100
 
     def __init__(self):
-        # Persistent client reuses TCP connections across calls (HTTP keep-alive)
+        self._client: httpx.Client | None = None
+        self._last_request_at: float | None = None
+        self._request_count: int = 0
+        self._create_client()
+
+    def _create_client(self) -> None:
+        """Create a fresh httpx.Client, closing any existing one first."""
+        if self._client is not None:
+            try:
+                self._client.close()
+            except Exception:
+                pass
         self._client = httpx.Client(
             headers=self.HEADERS,
             timeout=30.0,
             follow_redirects=True,
         )
-        self._last_request_at: float | None = None
+        self._request_count = 0
+
+    def reset_connection(self) -> None:
+        """Manually recycle the HTTP connection pool."""
+        print("🔄 Recycling HTTP connection pool...")
+        self._create_client()
+
+    def _maybe_recycle(self) -> None:
+        """Recycle the client if the request count has reached the limit."""
+        if self._request_count >= self.CONNECTION_RECYCLE_LIMIT:
+            print(
+                f"🔄 Auto-recycling HTTP connection after "
+                f"{self._request_count} requests"
+            )
+            self._create_client()
 
     def _throttle(self):
         """Ensure at least MIN_REQUEST_INTERVAL (+jitter) has passed since
@@ -55,41 +75,24 @@ class PageScraperService:
                 time.sleep(remaining)
         self._last_request_at = time.monotonic()
 
-    def extract_html_content(self, url: str, max_retries: int = 3):
-        last_error = None
-        for attempt in range(1, max_retries + 1):
-            self._throttle()
-            try:
-                response = self._client.get(url)
-                response.raise_for_status()
-                return response.text
-            except httpx.HTTPStatusError as e:
-                last_error = e
-                is_rate_limited = e.response.status_code == 500
-                if attempt < max_retries:
-                    if is_rate_limited:
-                        cooldown = self.RATE_LIMIT_COOLDOWN + random.uniform(
-                            0, self.RATE_LIMIT_COOLDOWN_JITTER
-                        )
-                        print(
-                            f"Fetch attempt {attempt}/{max_retries} failed for {url}: {e}. "
-                            f"500 suggests rate limiting — cooling down {cooldown:.1f}s before retry..."
-                        )
-                        time.sleep(cooldown)
-                    else:
-                        print(
-                            f"Fetch attempt {attempt}/{max_retries} failed for {url}: {e}. Retrying after backoff..."
-                        )
-                        time.sleep(1.5 * attempt)
-            except httpx.RequestError as e:
-                last_error = e
-                if attempt < max_retries:
-                    print(
-                        f"Fetch attempt {attempt}/{max_retries} failed for {url}: {e}. Retrying after backoff..."
-                    )
-                    time.sleep(1.5 * attempt)
+    def extract_html_content(self, url: str):
+        """Fetch a single URL — no retries.  Raises on any failure so the
+        caller can decide whether to abort the job."""
+        self._maybe_recycle()
+        self._throttle()
 
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error fetching URL after {max_retries} attempts: {last_error}",
-        )
+        try:
+            self._request_count += 1
+            response = self._client.get(url)
+            response.raise_for_status()
+            return response.text
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(
+                status_code=e.response.status_code,
+                detail=f"HTTP {e.response.status_code} fetching {url}: {e}",
+            )
+        except httpx.RequestError as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Request error fetching {url}: {e}",
+            )

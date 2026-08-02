@@ -19,6 +19,11 @@ from src.services.scraper.publisher_scraper_service import PublisherScraperServi
 from src.services.progress_manager import ProgressManager
 
 
+class ScrapeFailedError(Exception):
+    """Raised when a page scrape fails — signals the job to stop immediately."""
+    pass
+
+
 class ScraperService:
     def __init__(
         self,
@@ -137,14 +142,14 @@ class ScraperService:
             return raw_book
 
         except Exception as exc:
-            print(f"Failed to scrape raw data for {url}: {exc}")
+            print(f"❌ Scrape FAILED for {url}: {exc}")
             try:
                 await repo.save_raw_book_data(url, None)
             except Exception as save_exc:
                 print(f"Failed to save skipped record for {url}: {save_exc}")
             if progress:
                 progress.fail_product(url, str(exc))
-            return None
+            raise ScrapeFailedError(f"Scrape failed for {url}: {exc}") from exc
 
     async def reprocess_skipped_urls(
         self,
@@ -174,9 +179,15 @@ class ScraperService:
 
         reprocessed_books: list[RawBookData] = []
         for item in skipped_books:
-            raw_book = await self.scrape_single_raw(
-                item.url, session, progress=progress
-            )
+            try:
+                raw_book = await self.scrape_single_raw(
+                    item.url, session, progress=progress
+                )
+            except ScrapeFailedError:
+                print(
+                    f"⛔ Stopping reprocess — scrape failed at {item.url}"
+                )
+                break
             if (
                 raw_book
                 and raw_book.raw_data is not None
@@ -212,6 +223,7 @@ class ScraperService:
     ) -> list[RawBookData]:
         """
         Phase 1 (List): Extract all product URLs on list page and save their raw payloads.
+        Stops immediately if any single scrape fails (ScrapeFailedError).
         """
         html_content = self.page_scraper.extract_html_content(list_url)
         list_products = self.list_scraper.extract_book_list_single_page(html_content)
@@ -223,11 +235,18 @@ class ScraperService:
         for product in list_products["books"]:
             product_url = product["url"]
             product_img = product["img_low"]
-            raw_book = await self.scrape_single_raw(
-                product_url, session, product_img, progress=progress
-            )
-            if raw_book:
-                raw_books.append(raw_book)
+            try:
+                raw_book = await self.scrape_single_raw(
+                    product_url, session, product_img, progress=progress
+                )
+                if raw_book:
+                    raw_books.append(raw_book)
+            except ScrapeFailedError:
+                # Scrape failed — stop processing this list page
+                print(
+                    f"⛔ Stopping list page scrape — scrape failed at {product_url}"
+                )
+                break
 
         if progress:
             progress.complete_list_page()
@@ -242,12 +261,14 @@ class ScraperService:
     ) -> dict:
         """
         Phase 1 (Publisher): Discover all publisher pages and scrape all raw product items.
+        Stops the entire job if any list-page scrape encounters a connection failure.
         """
         html_content = self.page_scraper.extract_html_content(publisher_url)
         url_data = self.publisher_scraper.extract_publisher_list_url(html_content)
 
         total_list_urls = len(url_data["list_url"])
         all_raw_books: list[RawBookData] = []
+        stopped_early = False
 
         if progress:
             progress.set_publisher_pages(total_list_urls)
@@ -257,12 +278,24 @@ class ScraperService:
             if progress:
                 progress.complete_publisher_page(i)
 
-            raw_books = await self.scrape_list_product_raw(
-                list_url, session, progress=progress
-            )
-            all_raw_books.extend(raw_books)
+            try:
+                raw_books = await self.scrape_list_product_raw(
+                    list_url, session, progress=progress
+                )
+                all_raw_books.extend(raw_books)
+            except ScrapeFailedError:
+                # Connection-level failure on the list page fetch itself
+                print(
+                    f"⛔ Stopping publisher job — list page fetch failed at {list_url}"
+                )
+                stopped_early = True
+                break
 
-        return {"total_list_urls": total_list_urls, "raw_books": all_raw_books}
+        return {
+            "total_list_urls": total_list_urls,
+            "raw_books": all_raw_books,
+            "stopped_early": stopped_early,
+        }
 
     # ------------------------------------------------------------------ #
     #  PHASE 2: WARM-UP & CONCURRENT AI PROCESSING
