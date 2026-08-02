@@ -1,5 +1,3 @@
-import random
-import time
 from fastapi import HTTPException
 import httpx
 
@@ -15,13 +13,7 @@ class PageScraperService:
         "Accept-Language": "en-US,en;q=0.9",
     }
 
-    # Minimum gap enforced between the START of any two requests, successful
-    # or not. This is what was missing before: previously only failed
-    # requests paused at all, so 200+ back-to-back successes could fire as
-    # fast as the network allowed. Jitter avoids a perfectly metronomic
-    # pattern that's itself easy to fingerprint as a bot.
-    MIN_REQUEST_INTERVAL = 1.5  # seconds
-    REQUEST_JITTER = 1.0  # up to +1.0s extra, randomized
+
 
     # Automatically recycle the underlying TCP connection after this many
     # requests.  The target site appears to silently kill keep-alive sockets
@@ -30,7 +22,6 @@ class PageScraperService:
 
     def __init__(self):
         self._client: httpx.Client | None = None
-        self._last_request_at: float | None = None
         self._request_count: int = 0
         self._create_client()
 
@@ -62,24 +53,12 @@ class PageScraperService:
             )
             self._create_client()
 
-    def _throttle(self):
-        """Ensure at least MIN_REQUEST_INTERVAL (+jitter) has passed since
-        the last request was issued, regardless of whether it succeeded."""
-        if self._last_request_at is not None:
-            elapsed = time.monotonic() - self._last_request_at
-            wait_for = self.MIN_REQUEST_INTERVAL + random.uniform(
-                0, self.REQUEST_JITTER
-            )
-            remaining = wait_for - elapsed
-            if remaining > 0:
-                time.sleep(remaining)
-        self._last_request_at = time.monotonic()
+
 
     def extract_html_content(self, url: str):
         """Fetch a single URL — no retries.  Raises on any failure so the
         caller can decide whether to abort the job."""
         self._maybe_recycle()
-        self._throttle()
 
         try:
             self._request_count += 1
