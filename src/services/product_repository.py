@@ -287,11 +287,14 @@ class ProductRepository:
         return list(result.scalars().all())
 
     async def get_skipped_raw_books(self, limit: int | None = None) -> list[RawBookData]:
-        """Fetch all raw_book_data records where raw_data is NULL."""
-        from sqlalchemy import or_
+        """Fetch all raw_book_data records where raw_data is NULL or JSON null."""
+        from sqlalchemy import or_, text
 
         stmt = select(RawBookData).where(
-            or_(RawBookData.raw_data.is_(None), RawBookData.raw_data == None)
+            or_(
+                RawBookData.raw_data.is_(None),
+                text("raw_data::jsonb @> 'null'::jsonb"),
+            )
         )
         if limit:
             stmt = stmt.limit(limit)

@@ -18,6 +18,8 @@ from src.services.product_repository import ProductRepository
 from src.services.scraper.publisher_scraper_service import PublisherScraperService
 from src.services.progress_manager import ProgressManager
 
+NO_IMAGE_URL = "https://s3.ap-south-1.amazonaws.com/storage.commonfolks.in/images/no-image.jpg"
+
 
 class ScrapeFailedError(Exception):
     """Raised when a page scrape fails — signals the job to stop immediately."""
@@ -60,6 +62,13 @@ class ScraperService:
         Skips scraping if already processed by AI or if product exists in database to save API requests.
         """
         repo = ProductRepository(session)
+
+        if img_low == NO_IMAGE_URL:
+            print(f"Skipping {url} — no-image URL detected.")
+            await repo.save_raw_book_data(url, None)
+            if progress:
+                progress.fail_product(url, "No-image URL detected")
+            return None
         existing_raw = await repo.get_raw_book_by_url(url)
 
         if existing_raw:
@@ -108,11 +117,15 @@ class ScraperService:
             html_content = self.page_scraper.extract_html_content(url)
             book_data = self.single_scraper.extract_product_info(html_content, img_low)
 
-            if not book_data:
-                print(f"Warning: Extracted empty product info for {url}")
+            if (
+                not book_data
+                or book_data.get("img_url_high") == NO_IMAGE_URL
+                or book_data.get("img_url_low") == NO_IMAGE_URL
+            ):
+                print(f"Warning: Extracted empty or no-image product info for {url}")
                 await repo.save_raw_book_data(url, None)
                 if progress:
-                    progress.fail_product(url, "Empty product info extracted")
+                    progress.fail_product(url, "Empty or no-image product info extracted")
                 return None
 
             book_data["url"] = url

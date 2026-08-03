@@ -25,9 +25,15 @@ _FIELD_MAPPINGS = (
 )
 
 
+NO_IMAGE_URL = "https://s3.ap-south-1.amazonaws.com/storage.commonfolks.in/images/no-image.jpg"
+
+
 class SingleScraperService:
 
     def extract_product_info(self, html_content: str, img_low: str | None = None):
+        if img_low and img_low == NO_IMAGE_URL:
+            return {}
+
         # lxml is ~2-5x faster than html.parser (already in requirements.txt)
         soup = BeautifulSoup(html_content, "lxml")
 
@@ -119,11 +125,22 @@ class SingleScraperService:
 
         img = detail_page.select_one("div.product_image_main img")
         if img:
-            result["img_url_high"] = img.get("src")
+            img_src = img.get("src")
+            if img_src == NO_IMAGE_URL:
+                return {}
+            result["img_url_high"] = img_src
 
         if img_low:
+            if img_low == NO_IMAGE_URL:
+                return {}
             result["img_url_low"] = img_low
-        else:
-            result["img_url_low"] = img.get("src").replace("images_full", "images")
+        elif img and img.get("src"):
+            img_low_calc = img.get("src").replace("images_full", "images")
+            if img_low_calc == NO_IMAGE_URL:
+                return {}
+            result["img_url_low"] = img_low_calc
+
+        if result.get("img_url_high") == NO_IMAGE_URL or result.get("img_url_low") == NO_IMAGE_URL:
+            return {}
 
         return result
