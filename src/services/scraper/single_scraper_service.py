@@ -134,8 +134,8 @@ class SingleScraperService:
             if img_low == NO_IMAGE_URL:
                 return {}
             result["img_url_low"] = img_low
-        elif img and img.get("src"):
-            img_low_calc = img.get("src").replace("images_full", "images")
+        elif result.get("img_url_high"):
+            img_low_calc = result["img_url_high"].replace("images_full", "images")
             if img_low_calc == NO_IMAGE_URL:
                 return {}
             result["img_url_low"] = img_low_calc
