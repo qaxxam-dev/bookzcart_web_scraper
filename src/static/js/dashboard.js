@@ -62,6 +62,7 @@
     let startedAtMs = 0;
     let elapsedInterval = null;
     let lastLogLength = 0;
+    let prevStatus = "idle";  // track previous status for notification edge detection
 
     // ────────────────────────────────────────────
     //  SSE Connection
@@ -162,6 +163,15 @@
             stopElapsedTicker();
             dom.globalElapsed.textContent = "00:00:00";
         }
+
+        // Fire notification on status transition to completed/failed
+        if (
+            (data.status === "completed" || data.status === "failed") &&
+            prevStatus === "running"
+        ) {
+            fireJobNotification(data);
+        }
+        prevStatus = data.status;
 
         // Lock / unlock UI
         if (data.status === "running" && !isRunning) {
@@ -369,8 +379,80 @@
     }
 
     // ────────────────────────────────────────────
+    //  Notifications
+    // ────────────────────────────────────────────
+
+    /** Request browser notification permission on first visit. */
+    function requestNotificationPermission() {
+        if ("Notification" in window && Notification.permission === "default") {
+            Notification.requestPermission();
+        }
+    }
+
+    /**
+     * Fire a notification when a job completes or fails.
+     * Shows both a native browser notification and an in-page toast.
+     */
+    function fireJobNotification(data) {
+        const nameMap = { publisher: "Publisher", reprocess_skipped: "Reprocess Skipped" };
+        const jobName = nameMap[data.endpoint] || data.endpoint || "Job";
+        const isSuccess = data.status === "completed";
+        const icon = isSuccess ? "✅" : "❌";
+        const title = isSuccess
+            ? `${icon} ${jobName} — Completed`
+            : `${icon} ${jobName} — Failed`;
+
+        const duration = fmtElapsed(data.elapsed_seconds);
+        const lines = [`Duration: ${duration}`];
+        if (data.products_processed) lines.push(`Processed: ${fmtComma(data.products_processed)}`);
+        if (data.products_failed)    lines.push(`Failed: ${fmtComma(data.products_failed)}`);
+        if (data.error_message)      lines.push(`Error: ${data.error_message.slice(0, 80)}`);
+        const body = lines.join("  ·  ");
+
+        // Native browser notification
+        if ("Notification" in window && Notification.permission === "granted") {
+            try {
+                new Notification(title, { body, icon: "/static/favicon.ico" });
+            } catch (_) { /* ignore */ }
+        }
+
+        // In-page toast
+        showToast(title, body, isSuccess ? "success" : "error");
+    }
+
+    /** Show an in-page toast notification. */
+    function showToast(title, body, type) {
+        let container = document.getElementById("toast-container");
+        if (!container) {
+            container = document.createElement("div");
+            container.id = "toast-container";
+            document.body.appendChild(container);
+        }
+
+        const toast = document.createElement("div");
+        toast.className = `toast toast--${type}`;
+        toast.innerHTML = `
+            <div class="toast__icon">${type === "success" ? "✅" : "❌"}</div>
+            <div class="toast__body">
+                <div class="toast__title">${title}</div>
+                <div class="toast__message">${body}</div>
+            </div>
+            <button class="toast__close" onclick="this.parentElement.remove()">&times;</button>
+        `;
+
+        container.appendChild(toast);
+
+        // Auto-dismiss after 8 seconds
+        setTimeout(() => {
+            toast.classList.add("toast--exit");
+            toast.addEventListener("animationend", () => toast.remove());
+        }, 8000);
+    }
+
+    // ────────────────────────────────────────────
     //  Init
     // ────────────────────────────────────────────
 
+    requestNotificationPermission();
     connectSSE();
 })();
