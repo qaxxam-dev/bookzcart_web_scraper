@@ -24,15 +24,5 @@ class Settings(BaseSettings):
             f"{self.DATABASE_NAME}"
         )
 
-    GENAI_API_KEY_01: str = "AQ.Ab8RN6LWbe1PiNbbpjmw-iqFWfoISbP8CPVpI2L2wjjgkdb_5A"
-    GENAI_API_KEY_02: str = "AIzaSyCbtV1EBn67m6QcUwdtxETKEfRz2gu9oyQ"
-    GENAI_API_KEY_03: str = "AQ.Ab8RN6JMROVb1gNawpg7HLLKZ-BNSy7DJz5HaiPpl2ahVMb1rg"
-    GENAI_API_KEY_04: str = "AQ.Ab8RN6IM-vUtfkjeBV0IwGQyn5Sc55jbOjjhDloYQcCO7Pm3uA"
-    GENAI_API_KEY_05: str = "AIzaSyBeEXtrt1qXaah9j0jggNDbKr14UvCBU-Q"
-    GENAI_API_KEY_06: str = "AQ.Ab8RN6I_a1afa1vCMaSpxmK20DvxhnHZz16OpUUoDJLpaxvh7A"
-    GENAI_API_KEY_07: str = "AQ.Ab8RN6JdXCYlMhptw9z5sKG1r3180bGLlllerDaeEStmFFG0ew"
-    GENAI_API_KEY_08: str = "AIzaSyDYKSy7wdQmjDa7wXFM5xJ_cSrTDH24cl0"
-    GENAI_API_KEY_09: str = "AIzaSyCv8ri4x_bfCZZ6y_PaxwjyRtyLT9K2f7c"
-
 
 settings = Settings()
